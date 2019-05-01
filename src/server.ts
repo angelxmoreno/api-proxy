@@ -1,83 +1,68 @@
+import dotenv from "dotenv";
+dotenv.config();
 import axios from "axios";
 import express, { Application, Request, Response } from "express";
 import md5 from "md5";
 import NodeCache from "node-cache";
-const myCache = new NodeCache( { stdTTL: 100, checkperiod: 120 } );
+import moduleConfig from "./modules";
+import { ProxyRequestInfo, ProxyResponseInfo } from "./types";
+const myCache = new NodeCache({ stdTTL: 100, checkperiod: 120 });
 const app: Application = express();
 const port: number = 3002;
 
-interface ModuleConfig {
-  baseURL: string;
-}
-interface ModuleConfigCollection {
-  [key: string]: ModuleConfig;
-}
-
-interface RequestInfo {
-  method: string;
-  baseURL: string;
-  url: string;
-  data: string;
-}
-
-interface ResponseInfo {
-  status: number;
-  data: string;
-}
-const moduleConfig: ModuleConfigCollection = {
-  jsonplaceholder: {
-    baseURL: "https://jsonplaceholder.typicode.com/"
-  }
-};
-
-const buildRequestInfoFromServerRequest = (req: Request) => {
+const buildProxyRequestInfoFromServerRequest = (req: Request) => {
+  let params;
   const module = moduleConfig[req.params.module];
   const baseURL = module.baseURL;
   const url = req.params[0];
-  const data = req.query;
+  params = req.query;
   const method = req.method;
+  if (module.params) {
+    params = { ...module.params, ...params };
+  }
 
   return {
     url,
     method,
     baseURL,
-    data
+    params
   };
 };
 
-const getResponseFromRequestInfo = async (
-  requestInfo: RequestInfo
-): Promise<ResponseInfo> => {
+const getResponseFromProxyRequestInfo = async (
+  requestInfo: ProxyRequestInfo
+): Promise<ProxyResponseInfo> => {
+  console.log("calling", requestInfo);
   const response = await axios.request(requestInfo);
   const data: string = response.data;
   const status: number = response.status;
   return { status, data };
 };
 
-const buildEtag = (requestInfo: RequestInfo) =>
+const buildEtag = (requestInfo: ProxyRequestInfo) =>
   md5(JSON.stringify(requestInfo));
 
 app.all("/api/:module/**", async (req: Request, res: Response) => {
   try {
-    const requestInfo = buildRequestInfoFromServerRequest(req);
+    const requestInfo = buildProxyRequestInfoFromServerRequest(req);
     const etag = buildEtag(requestInfo);
     const cached = await myCache.get(etag);
     let response;
     if (cached === undefined) {
       console.info("cached is undefined: ", etag);
-      response = await getResponseFromRequestInfo(requestInfo);
+      response = await getResponseFromProxyRequestInfo(requestInfo);
       myCache.set(etag, response);
     } else {
       console.info("found cache: ", etag);
-      response = cached as ResponseInfo;
+      response = cached as ProxyResponseInfo;
     }
 
     res.status(response.status).send(response.data);
   } catch (err) {
+    console.info("found error");
     res.json({
       error: true,
-      msg: err.message,
-      err
+      msg: err.message
     });
   }
 });
